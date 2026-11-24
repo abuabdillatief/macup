@@ -77,10 +77,10 @@ public final class StartupRunner {
                     }
                 }
 
-                let preferNewWindow = desktop.spaceIndex > 0
+                let isSecondarySpace = desktop.spaceIndex > 1
                 for app in enabledApps {
                     if Task.isCancelled { return }
-                    await self.launchAndPosition(app, preferNewWindowOnCurrentSpace: preferNewWindow)
+                    await self.launchAndPosition(app, preferNewWindowOnCurrentSpace: isSecondarySpace)
                 }
             }
 
@@ -214,7 +214,7 @@ public final class StartupRunner {
                     }
                 } else {
                     if !WindowManager.triggerNewWindowMenu(pid: existing.processIdentifier) {
-                        _ = await runOpenCommand(args: ["-na", appURL.path])
+                        _ = await runOpenCommand(args: ["-a", appURL.path])
                     }
                 }
                 openedNewWindowWithoutActivate = true
