@@ -307,11 +307,7 @@ public struct ProfileDetailView: View {
                     }
                 }
                 .frame(width: 150)
-
-                Toggle("Add New Space", isOn: desktop.createNewSpace)
-                    .font(.caption)
-                    .toggleStyle(.checkbox)
-                    .help("Best-effort attempt to click '+' in Mission Control before switching")
+                .help("Switches to this Desktop, automatically creating it in Mission Control if it doesn't exist yet")
 
                 Button(role: .destructive) {
                     profile.desktops.removeAll { $0.id == desktop.wrappedValue.id }

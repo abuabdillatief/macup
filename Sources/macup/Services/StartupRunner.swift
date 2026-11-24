@@ -59,53 +59,69 @@ public final class StartupRunner {
             for desktop in profile.desktops {
                 if Task.isCancelled { return }
                 let enabledApps = desktop.apps.filter { $0.isEnabled }
-                if enabledApps.isEmpty && !desktop.createNewSpace {
+                if enabledApps.isEmpty {
                     continue
                 }
 
                 self.log(.info, "Setting up desktop \"\(desktop.name)\"...")
 
-                if desktop.createNewSpace {
-                    self.log(.info, "Attempting to add a new macOS Desktop via Mission Control...")
-                    let created = await WindowManager.createNewDesktopSpace()
-                    if created {
-                        self.log(.success, "Created new Desktop space.")
-                        try? await Task.sleep(nanoseconds: 700_000_000)
-                    } else {
-                        self.log(.warning, "Could not auto-create a new Desktop via Mission Control (ensure Accessibility & Automation are granted).")
-                    }
-                }
-
                 if desktop.spaceIndex > 0 {
                     do {
                         let directEnabled = WindowManager.isDirectDesktopShortcutEnabled(for: desktop.spaceIndex)
                         if directEnabled {
-                            let changed = try await self.performSpaceSwitch {
+                            var changed = try await self.performSpaceSwitch {
                                 try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
+                            }
+                            if !changed && desktop.spaceIndex > currentSpaceIndex {
+                                self.log(.info, "Desktop \(desktop.spaceIndex) not found — creating it in Mission Control...")
+                                let created = await WindowManager.createNewDesktopSpace()
+                                if created {
+                                    self.log(.success, "Created new Desktop space.")
+                                    try? await Task.sleep(nanoseconds: 500_000_000)
+                                    changed = try await self.performSpaceSwitch {
+                                        try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
+                                    }
+                                } else {
+                                    self.log(.warning, "Could not auto-create Desktop \(desktop.spaceIndex) via Mission Control.")
+                                }
                             }
                             if changed {
                                 self.log(.success, "Switched to Desktop \(desktop.spaceIndex) (Control+\(desktop.spaceIndex)).")
                             } else {
-                                self.log(.info, "Already on Desktop \(desktop.spaceIndex) (or Desktop \(desktop.spaceIndex) does not exist yet).")
+                                self.log(.info, "Staying on Desktop \(desktop.spaceIndex).")
                             }
                         } else {
                             let delta = desktop.spaceIndex - currentSpaceIndex
                             if delta != 0 {
                                 let dirLabel = delta > 0 ? "Right" : "Left"
                                 var movedCount = 0
-                                for _ in 0..<abs(delta) {
-                                    let changed = try await self.performSpaceSwitch {
+                                for step in 0..<abs(delta) {
+                                    var changed = try await self.performSpaceSwitch {
                                         try WindowManager.stepDesktopSpace(direction: delta)
+                                    }
+                                    if !changed && delta > 0 {
+                                        // Target space doesn't exist yet — create one automatically, then step into it
+                                        self.log(.info, "Desktop \(currentSpaceIndex + step + 1) not found — creating it in Mission Control...")
+                                        let created = await WindowManager.createNewDesktopSpace()
+                                        if created {
+                                            self.log(.success, "Created new Desktop space.")
+                                            try? await Task.sleep(nanoseconds: 500_000_000)
+                                            changed = try await self.performSpaceSwitch {
+                                                try WindowManager.stepDesktopSpace(direction: delta)
+                                            }
+                                        } else {
+                                            self.log(.warning, "Could not auto-create Desktop \(currentSpaceIndex + step + 1) via Mission Control.")
+                                        }
                                     }
                                     if changed { movedCount += 1 }
                                 }
                                 if movedCount == abs(delta) {
                                     self.log(.success, "Switched to Desktop \(desktop.spaceIndex) via Control+\(dirLabel) (×\(movedCount)).")
                                 } else {
-                                    self.log(.warning, "Moved \(movedCount)/\(abs(delta)) space(s) via Control+\(dirLabel). Make sure Desktop \(desktop.spaceIndex) exists in Mission Control.")
+                                    self.log(.warning, "Moved \(movedCount)/\(abs(delta)) space(s) via Control+\(dirLabel).")
                                 }
                             } else {
-                                self.log(.info, "Using Desktop \(desktop.spaceIndex) (Control+\(desktop.spaceIndex) shortcut is disabled in System Settings).")
+                                self.log(.info, "Using Desktop \(desktop.spaceIndex).")
                             }
                         }
                         currentSpaceIndex = desktop.spaceIndex
