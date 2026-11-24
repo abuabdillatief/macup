@@ -180,7 +180,8 @@ public enum WindowManager {
             throw WindowManagerError.accessibilityNotGranted
         }
         let keyCode = direction >= 0 ? CGKeyCode(kVK_RightArrow) : CGKeyCode(kVK_LeftArrow)
-        postKeyCombo(keyCode: keyCode, flags: .maskControl)
+        // Arrow keys on macOS require .maskSecondaryFn alongside .maskControl for Mission Control to recognize them.
+        postKeyCombo(keyCode: keyCode, flags: [.maskControl, .maskSecondaryFn])
     }
 
     /// Best-effort creation of a new Desktop Space via Mission Control UI scripting.
@@ -189,14 +190,28 @@ public enum WindowManager {
 
         let scriptSource = """
         do shell script "open -a 'Mission Control'"
-        delay 0.6
+        delay 0.8
         tell application "System Events"
             tell process "Dock"
                 try
-                    click (first button of group 1 of group 1 of group 1 whose description is "add desktop")
-                    delay 0.4
-                    key code 53
-                    return true
+                    set addBtn to missing value
+                    repeat with uiElem in entire contents of group 1
+                        try
+                            if (role of uiElem is "AXButton") and (description of uiElem is "add desktop") then
+                                set addBtn to uiElem
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                    if addBtn is not missing value then
+                        click addBtn
+                        delay 0.5
+                        key code 53
+                        return true
+                    else
+                        key code 53
+                        return false
+                    end if
                 on error
                     try
                         key code 53
@@ -219,6 +234,12 @@ public enum WindowManager {
 
     private static func postKeyCombo(keyCode: CGKeyCode, flags: CGEventFlags) {
         let source = CGEventSource(stateID: .hidSystemState)
+        // Explicitly send Control modifier down/up around the key event so Dock/Mission Control reliably captures it
+        if flags.contains(.maskControl),
+           let ctrlDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Control), keyDown: true) {
+            ctrlDown.flags = flags
+            ctrlDown.post(tap: .cghidEventTap)
+        }
         if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) {
             keyDown.flags = flags
             keyDown.post(tap: .cghidEventTap)
@@ -226,6 +247,11 @@ public enum WindowManager {
         if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
             keyUp.flags = flags
             keyUp.post(tap: .cghidEventTap)
+        }
+        if flags.contains(.maskControl),
+           let ctrlUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Control), keyDown: false) {
+            ctrlUp.flags = []
+            ctrlUp.post(tap: .cghidEventTap)
         }
     }
 }

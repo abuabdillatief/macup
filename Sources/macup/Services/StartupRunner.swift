@@ -78,24 +78,34 @@ public final class StartupRunner {
 
                 if desktop.spaceIndex > 0 {
                     do {
-                        if WindowManager.isDirectDesktopShortcutEnabled(for: desktop.spaceIndex) {
-                            try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
-                            self.log(.info, "Switched to Desktop \(desktop.spaceIndex) (Control+\(desktop.spaceIndex)).")
-                            try? await Task.sleep(nanoseconds: 700_000_000)
+                        let directEnabled = WindowManager.isDirectDesktopShortcutEnabled(for: desktop.spaceIndex)
+                        if directEnabled {
+                            let changed = try await self.performSpaceSwitch {
+                                try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
+                            }
+                            if changed {
+                                self.log(.success, "Switched to Desktop \(desktop.spaceIndex) (Control+\(desktop.spaceIndex)).")
+                            } else {
+                                self.log(.info, "Already on Desktop \(desktop.spaceIndex) (or Desktop \(desktop.spaceIndex) does not exist yet).")
+                            }
                         } else {
                             let delta = desktop.spaceIndex - currentSpaceIndex
                             if delta != 0 {
                                 let dirLabel = delta > 0 ? "Right" : "Left"
-                                self.log(.info, "Stepping to Desktop \(desktop.spaceIndex) via Control+\(dirLabel) (×\(abs(delta))).")
+                                var movedCount = 0
                                 for _ in 0..<abs(delta) {
-                                    try WindowManager.stepDesktopSpace(direction: delta)
-                                    try? await Task.sleep(nanoseconds: 700_000_000)
+                                    let changed = try await self.performSpaceSwitch {
+                                        try WindowManager.stepDesktopSpace(direction: delta)
+                                    }
+                                    if changed { movedCount += 1 }
+                                }
+                                if movedCount == abs(delta) {
+                                    self.log(.success, "Switched to Desktop \(desktop.spaceIndex) via Control+\(dirLabel) (×\(movedCount)).")
+                                } else {
+                                    self.log(.warning, "Moved \(movedCount)/\(abs(delta)) space(s) via Control+\(dirLabel). Make sure Desktop \(desktop.spaceIndex) exists in Mission Control.")
                                 }
                             } else {
-                                // Still send Control+N in case user is currently on a different space
-                                try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
-                                self.log(.info, "Targeting Desktop \(desktop.spaceIndex). Tip: enable 'Switch to Desktop \(desktop.spaceIndex)' in System Settings → Keyboard Shortcuts → Mission Control for direct jumps.")
-                                try? await Task.sleep(nanoseconds: 500_000_000)
+                                self.log(.info, "Using Desktop \(desktop.spaceIndex) (Control+\(desktop.spaceIndex) shortcut is disabled in System Settings).")
                             }
                         }
                         currentSpaceIndex = desktop.spaceIndex
@@ -220,18 +230,23 @@ public final class StartupRunner {
             : NSRunningApplication.runningApplications(withBundleIdentifier: item.bundleIdentifier).first
 
         let runningApp: NSRunningApplication
-        if preferNewWindowOnCurrentSpace, existingApp != nil, item.isChromiumBasedBrowser {
-            // Open a fresh window on the current Desktop Space instead of jumping back to an existing Space
-            var args = ["-na", appURL.path, "--args", "--new-window"]
-            args.append(contentsOf: urlsToOpen.map(\.absoluteString))
-            let launched = await runOpenCommand(args: args)
-            if !launched {
-                log(.warning, "Fallback opening \(item.appName) normally...")
-            }
-            if let existing = existingApp {
-                runningApp = existing
+        var openedNewWindowWithoutActivate = false
+        if preferNewWindowOnCurrentSpace, existingApp != nil, item.isBrowser {
+            if item.bundleIdentifier.lowercased() == "com.apple.safari" {
+                let firstURL = urlsToOpen.first?.absoluteString ?? ""
+                let script = firstURL.isEmpty
+                    ? "tell application \"Safari\" to make new document"
+                    : "tell application \"Safari\" to make new document with properties {URL:\"\(firstURL.replacingOccurrences(of: "\"", with: "\\\""))\"}"
+                _ = await runAppleScript(script)
+                openedNewWindowWithoutActivate = true
+                runningApp = existingApp!
             } else {
-                return
+                // Chromium-based (Chrome, Dia, Arc, Brave, Edge, Vivaldi, Opera) and Firefox support --new-window
+                var args = ["-na", appURL.path, "--args", "--new-window"]
+                args.append(contentsOf: urlsToOpen.map(\.absoluteString))
+                _ = await runOpenCommand(args: args)
+                openedNewWindowWithoutActivate = true
+                runningApp = existingApp!
             }
         } else {
             let config = NSWorkspace.OpenConfiguration()
@@ -260,11 +275,15 @@ public final class StartupRunner {
             return
         }
 
-        // Retry positioning briefly while the app finishes creating its first window
+        // Retry positioning briefly while the app finishes creating its first window.
+        // Avoid calling runningApp.activate() when we opened a new window on a specific Space,
+        // otherwise macOS may jump back to another Space that has an older window of the same app.
         var lastError: Error?
         for attempt in 1...6 {
             if Task.isCancelled { return }
-            runningApp.activate(options: [])
+            if !openedNewWindowWithoutActivate {
+                runningApp.activate(options: [])
+            }
             do {
                 try WindowManager.positionWindow(
                     pid: runningApp.processIdentifier,
@@ -286,6 +305,45 @@ public final class StartupRunner {
         }
 
         log(.warning, "Opened \(item.appName), but could not place window: \(lastError?.localizedDescription ?? "Unknown error")")
+    }
+
+    /// Runs a space-switching action and observes NSWorkspace.activeSpaceDidChangeNotification
+    /// to verify whether macOS actually switched Spaces.
+    private func performSpaceSwitch(_ action: () throws -> Void) async throws -> Bool {
+        var didChange = false
+        let token = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            didChange = true
+        }
+        defer {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+        }
+
+        try action()
+        // Wait up to 0.9s for macOS Space switch animation
+        for _ in 0..<9 {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if didChange {
+                // Give macOS a moment to settle on the new Space
+                try? await Task.sleep(nanoseconds: 350_000_000)
+                return true
+            }
+        }
+        return didChange
+    }
+
+    private func runAppleScript(_ source: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                var err: NSDictionary?
+                let script = NSAppleScript(source: source)
+                let res = script?.executeAndReturnError(&err)
+                continuation.resume(returning: res != nil && err == nil)
+            }
+        }
     }
 
     private func runOpenCommand(args: [String]) async -> Bool {
