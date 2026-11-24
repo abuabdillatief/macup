@@ -131,6 +131,19 @@ public enum WindowManager {
         return nil
     }
 
+    /// Checks whether macOS Mission Control's "Switch to Desktop N" shortcut (Control + 1...9)
+    /// is enabled in `com.apple.symbolichotkeys` (keys 118...126).
+    public static func isDirectDesktopShortcutEnabled(for spaceIndex: Int) -> Bool {
+        guard (1...9).contains(spaceIndex) else { return false }
+        let key = String(117 + spaceIndex)
+        guard let hotkeys = UserDefaults(suiteName: "com.apple.symbolichotkeys")?.dictionary(forKey: "AppleSymbolicHotKeys"),
+              let entry = hotkeys[key] as? [String: Any],
+              let enabled = entry["enabled"] as? Bool else {
+            return false
+        }
+        return enabled
+    }
+
     /// Switches to macOS Desktop Space 1...9 using the standard Mission Control shortcut (Control + 1...9).
     /// Requires Accessibility permission and "Switch to Desktop N" enabled in System Settings > Keyboard > Keyboard Shortcuts > Mission Control.
     public static func switchToDesktopSpace(_ spaceIndex: Int) throws {
@@ -157,6 +170,16 @@ public enum WindowManager {
             throw WindowManagerError.invalidSpaceIndex(spaceIndex)
         }
 
+        postKeyCombo(keyCode: keyCode, flags: .maskControl)
+    }
+
+    /// Steps left (negative) or right (positive) across Desktop Spaces using Control + Left/Right Arrow,
+    /// which is enabled by default on macOS Mission Control.
+    public static func stepDesktopSpace(direction: Int) throws {
+        guard isAccessibilityGranted else {
+            throw WindowManagerError.accessibilityNotGranted
+        }
+        let keyCode = direction >= 0 ? CGKeyCode(kVK_RightArrow) : CGKeyCode(kVK_LeftArrow)
         postKeyCombo(keyCode: keyCode, flags: .maskControl)
     }
 

@@ -335,62 +335,9 @@ public struct ProfileDetailView: View {
             } else {
                 VStack(spacing: 6) {
                     ForEach(desktop.apps) { $app in
-                        HStack(spacing: 10) {
-                            Toggle("", isOn: $app.isEnabled)
-                                .labelsHidden()
-                                .toggleStyle(.checkbox)
-
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: app.appPath))
-                                .resizable()
-                                .frame(width: 22, height: 22)
-
-                            Text(app.appName)
-                                .font(.subheadline.weight(.medium))
-                                .frame(minWidth: 100, alignment: .leading)
-
-                            PlacementMiniIcon(placement: app.placement, width: 24, height: 16)
-
-                            Picker("", selection: $app.placement) {
-                                ForEach(WindowPlacement.allCases) { p in
-                                    Text(p.displayName).tag(p)
-                                }
-                            }
-                            .labelsHidden()
-                            .frame(width: 165)
-
-                            if screensCount > 1 {
-                                Picker("", selection: $app.screenIndex) {
-                                    ForEach(0..<screensCount, id: \.self) { sIdx in
-                                        Text("Display \(sIdx + 1)").tag(sIdx)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 96)
-                            }
-
-                            Spacer()
-
-                            Button {
-                                showLogs = true
-                                runner.testApp(app)
-                            } label: {
-                                Image(systemName: "play.circle")
-                            }
-                            .buttonStyle(.plain)
-                            .help("Test launching & placing this app")
-
-                            Button(role: .destructive) {
-                                desktop.wrappedValue.apps.removeAll { $0.id == app.id }
-                            } label: {
-                                Image(systemName: "xmark.circle")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Remove app")
+                        appRowCard(app: $app, screensCount: screensCount) {
+                            desktop.wrappedValue.apps.removeAll { $0.id == app.id }
                         }
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 8)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .windowBackgroundColor).opacity(0.6)))
                     }
                 }
             }
@@ -412,6 +359,134 @@ public struct ProfileDetailView: View {
                 .fill(Color(nsColor: .controlBackgroundColor))
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.2), lineWidth: 1))
         )
+    }
+
+    private func appRowCard(
+        app: Binding<AppLaunchItem>,
+        screensCount: Int,
+        onRemove: @escaping () -> Void
+    ) -> some View {
+        let item = app.wrappedValue
+        let showURLSection = item.isBrowser || !item.urls.isEmpty
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Toggle("", isOn: app.isEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.checkbox)
+
+                Image(nsImage: NSWorkspace.shared.icon(forFile: item.appPath))
+                    .resizable()
+                    .frame(width: 22, height: 22)
+
+                Text(item.appName)
+                    .font(.subheadline.weight(.medium))
+                    .frame(minWidth: 100, alignment: .leading)
+
+                PlacementMiniIcon(placement: item.placement, width: 24, height: 16)
+
+                Picker("", selection: app.placement) {
+                    ForEach(WindowPlacement.allCases) { p in
+                        Text(p.displayName).tag(p)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 165)
+
+                if screensCount > 1 {
+                    Picker("", selection: app.screenIndex) {
+                        ForEach(0..<screensCount, id: \.self) { sIdx in
+                            Text("Display \(sIdx + 1)").tag(sIdx)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 96)
+                }
+
+                Spacer()
+
+                if !showURLSection {
+                    Button {
+                        app.wrappedValue.urls.append("")
+                    } label: {
+                        Image(systemName: "globe")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add a URL or deep link to open with this app")
+                }
+
+                Button {
+                    showLogs = true
+                    runner.testApp(item)
+                } label: {
+                    Image(systemName: "play.circle")
+                }
+                .buttonStyle(.plain)
+                .help("Test launching & placing this app")
+
+                Button(role: .destructive, action: onRemove) {
+                    Image(systemName: "xmark.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove app")
+            }
+
+            if showURLSection {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(item.urls.indices, id: \.self) { urlIdx in
+                        HStack(spacing: 6) {
+                            Image(systemName: "globe")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            TextField(
+                                "https://example.com",
+                                text: Binding(
+                                    get: {
+                                        guard urlIdx < app.wrappedValue.urls.count else { return "" }
+                                        return app.wrappedValue.urls[urlIdx]
+                                    },
+                                    set: { newValue in
+                                        guard urlIdx < app.wrappedValue.urls.count else { return }
+                                        app.wrappedValue.urls[urlIdx] = newValue
+                                    }
+                                )
+                            )
+                            .font(.caption.monospaced())
+                            .textFieldStyle(.roundedBorder)
+
+                            Button {
+                                guard urlIdx < app.wrappedValue.urls.count else { return }
+                                app.wrappedValue.urls.remove(at: urlIdx)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove URL")
+                        }
+                    }
+
+                    Button {
+                        app.wrappedValue.urls.append("")
+                    } label: {
+                        Label(
+                            item.urls.isEmpty ? "Add URL to open" : "Add another URL",
+                            systemImage: "plus.circle"
+                        )
+                        .font(.caption)
+                    }
+                    .buttonStyle(.link)
+                }
+                .padding(.leading, 32)
+                .padding(.bottom, 2)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .windowBackgroundColor).opacity(0.6)))
     }
 
     private func emptyCard(text: String) -> some View {

@@ -54,4 +54,26 @@ final class MacupTests: XCTestCase {
         XCTAssertEqual(reloaded.profiles.count, store.profiles.count)
         XCTAssertEqual(reloaded.defaultProfile?.name, "Coding")
     }
+
+    func testBrowserDetectionAndURLResolution() {
+        let safari = AppLaunchItem(
+            appName: "Safari",
+            bundleIdentifier: "com.apple.Safari",
+            appPath: "/Applications/Safari.app",
+            urls: ["github.com", "https://linear.app", "  "]
+        )
+        XCTAssertTrue(safari.isBrowser)
+        XCTAssertEqual(safari.resolvedURLs.map(\.absoluteString), [
+            "https://github.com",
+            "https://linear.app"
+        ])
+
+        let notes = AppLaunchItem(
+            appName: "Notes",
+            bundleIdentifier: "com.apple.Notes",
+            appPath: "/System/Applications/Notes.app"
+        )
+        XCTAssertFalse(notes.isBrowser)
+        XCTAssertTrue(notes.resolvedURLs.isEmpty)
+    }
 }

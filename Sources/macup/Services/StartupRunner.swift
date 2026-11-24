@@ -55,6 +55,7 @@ public final class StartupRunner {
             }
 
             // 2. Desktops & Apps
+            var currentSpaceIndex = 1
             for desktop in profile.desktops {
                 if Task.isCancelled { return }
                 let enabledApps = desktop.apps.filter { $0.isEnabled }
@@ -71,23 +72,42 @@ public final class StartupRunner {
                         self.log(.success, "Created new Desktop space.")
                         try? await Task.sleep(nanoseconds: 700_000_000)
                     } else {
-                        self.log(.warning, "Could not auto-create a new Desktop via Mission Control (ensure Accessibility is granted).")
+                        self.log(.warning, "Could not auto-create a new Desktop via Mission Control (ensure Accessibility & Automation are granted).")
                     }
                 }
 
                 if desktop.spaceIndex > 0 {
                     do {
-                        try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
-                        self.log(.info, "Switched to Desktop \(desktop.spaceIndex).")
-                        try? await Task.sleep(nanoseconds: 650_000_000)
+                        if WindowManager.isDirectDesktopShortcutEnabled(for: desktop.spaceIndex) {
+                            try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
+                            self.log(.info, "Switched to Desktop \(desktop.spaceIndex) (Control+\(desktop.spaceIndex)).")
+                            try? await Task.sleep(nanoseconds: 700_000_000)
+                        } else {
+                            let delta = desktop.spaceIndex - currentSpaceIndex
+                            if delta != 0 {
+                                let dirLabel = delta > 0 ? "Right" : "Left"
+                                self.log(.info, "Stepping to Desktop \(desktop.spaceIndex) via Control+\(dirLabel) (×\(abs(delta))).")
+                                for _ in 0..<abs(delta) {
+                                    try WindowManager.stepDesktopSpace(direction: delta)
+                                    try? await Task.sleep(nanoseconds: 700_000_000)
+                                }
+                            } else {
+                                // Still send Control+N in case user is currently on a different space
+                                try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
+                                self.log(.info, "Targeting Desktop \(desktop.spaceIndex). Tip: enable 'Switch to Desktop \(desktop.spaceIndex)' in System Settings → Keyboard Shortcuts → Mission Control for direct jumps.")
+                                try? await Task.sleep(nanoseconds: 500_000_000)
+                            }
+                        }
+                        currentSpaceIndex = desktop.spaceIndex
                     } catch {
                         self.log(.warning, "Desktop switch skipped: \(error.localizedDescription)")
                     }
                 }
 
+                let preferNewWindow = desktop.spaceIndex > 0
                 for app in enabledApps {
                     if Task.isCancelled { return }
-                    await self.launchAndPosition(app)
+                    await self.launchAndPosition(app, preferNewWindowOnCurrentSpace: preferNewWindow)
                 }
             }
 
@@ -182,23 +202,52 @@ public final class StartupRunner {
         }
     }
 
-    private func launchAndPosition(_ item: AppLaunchItem) async {
+    private func launchAndPosition(_ item: AppLaunchItem, preferNewWindowOnCurrentSpace: Bool = false) async {
         guard let appURL = resolveAppURL(for: item) else {
             log(.error, "App not found: \(item.appName) (\(item.appPath))")
             return
         }
 
-        log(.info, "Opening \(item.appName)...")
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        config.createsNewApplicationInstance = false
+        let urlsToOpen = item.resolvedURLs
+        if urlsToOpen.isEmpty {
+            log(.info, "Opening \(item.appName)...")
+        } else {
+            log(.info, "Opening \(item.appName) with \(urlsToOpen.count) URL(s)...")
+        }
+
+        let existingApp = item.bundleIdentifier.isEmpty
+            ? nil
+            : NSRunningApplication.runningApplications(withBundleIdentifier: item.bundleIdentifier).first
 
         let runningApp: NSRunningApplication
-        do {
-            runningApp = try await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
-        } catch {
-            log(.error, "Failed to open \(item.appName): \(error.localizedDescription)")
-            return
+        if preferNewWindowOnCurrentSpace, existingApp != nil, item.isChromiumBasedBrowser {
+            // Open a fresh window on the current Desktop Space instead of jumping back to an existing Space
+            var args = ["-na", appURL.path, "--args", "--new-window"]
+            args.append(contentsOf: urlsToOpen.map(\.absoluteString))
+            let launched = await runOpenCommand(args: args)
+            if !launched {
+                log(.warning, "Fallback opening \(item.appName) normally...")
+            }
+            if let existing = existingApp {
+                runningApp = existing
+            } else {
+                return
+            }
+        } else {
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            config.createsNewApplicationInstance = false
+
+            do {
+                if urlsToOpen.isEmpty {
+                    runningApp = try await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
+                } else {
+                    runningApp = try await NSWorkspace.shared.open(urlsToOpen, withApplicationAt: appURL, configuration: config)
+                }
+            } catch {
+                log(.error, "Failed to open \(item.appName): \(error.localizedDescription)")
+                return
+            }
         }
 
         if item.delaySeconds > 0 {
@@ -237,6 +286,23 @@ public final class StartupRunner {
         }
 
         log(.warning, "Opened \(item.appName), but could not place window: \(lastError?.localizedDescription ?? "Unknown error")")
+    }
+
+    private func runOpenCommand(args: [String]) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                p.arguments = args
+                do {
+                    try p.run()
+                    p.waitUntilExit()
+                    continuation.resume(returning: p.terminationStatus == 0)
+                } catch {
+                    continuation.resume(returning: false)
+                }
+            }
+        }
     }
 
     private func resolveAppURL(for item: AppLaunchItem) -> URL? {

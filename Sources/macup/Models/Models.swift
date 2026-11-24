@@ -131,6 +131,7 @@ public struct AppLaunchItem: Identifiable, Codable, Hashable, Sendable {
     public var screenIndex: Int
     public var delaySeconds: Double
     public var isEnabled: Bool
+    public var urls: [String]
 
     public init(
         id: UUID = UUID(),
@@ -140,7 +141,8 @@ public struct AppLaunchItem: Identifiable, Codable, Hashable, Sendable {
         placement: WindowPlacement = .none,
         screenIndex: Int = 0,
         delaySeconds: Double = 1.0,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        urls: [String] = []
     ) {
         self.id = id
         self.appName = appName
@@ -150,6 +152,62 @@ public struct AppLaunchItem: Identifiable, Codable, Hashable, Sendable {
         self.screenIndex = screenIndex
         self.delaySeconds = delaySeconds
         self.isEnabled = isEnabled
+        self.urls = urls
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, appName, bundleIdentifier, appPath, placement, screenIndex, delaySeconds, isEnabled, urls
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        appName = try c.decode(String.self, forKey: .appName)
+        bundleIdentifier = try c.decodeIfPresent(String.self, forKey: .bundleIdentifier) ?? ""
+        appPath = try c.decode(String.self, forKey: .appPath)
+        placement = try c.decodeIfPresent(WindowPlacement.self, forKey: .placement) ?? .none
+        screenIndex = try c.decodeIfPresent(Int.self, forKey: .screenIndex) ?? 0
+        delaySeconds = try c.decodeIfPresent(Double.self, forKey: .delaySeconds) ?? 1.0
+        isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        urls = try c.decodeIfPresent([String].self, forKey: .urls) ?? []
+    }
+
+    public var isBrowser: Bool {
+        let lowerId = bundleIdentifier.lowercased()
+        let lowerName = appName.lowercased()
+        let browserBundleKeywords = [
+            "safari", "chrome", "chromium", "firefox", "brave",
+            "edgemac", "arc", "dia", "browser", "vivaldi", "opera",
+            "orion", "duckduckgo", "zen", "sigmaos", "torbrowser"
+        ]
+        if browserBundleKeywords.contains(where: { lowerId.contains($0) }) {
+            return true
+        }
+        let browserNames = [
+            "safari", "google chrome", "chrome", "firefox", "arc", "dia",
+            "brave browser", "microsoft edge", "vivaldi", "opera",
+            "orion", "zen", "zen browser", "duckduckgo", "chromium"
+        ]
+        return browserNames.contains(lowerName)
+    }
+
+    public var isChromiumBasedBrowser: Bool {
+        let lowerId = bundleIdentifier.lowercased()
+        let lowerName = appName.lowercased()
+        let keywords = ["chrome", "chromium", "brave", "edgemac", "vivaldi", "opera", "dia", "arc"]
+        return keywords.contains(where: { lowerId.contains($0) || lowerName.contains($0) })
+    }
+
+    /// Parses configured URL strings, prepending https:// when no scheme is provided.
+    public var resolvedURLs: [URL] {
+        urls.compactMap { raw in
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if trimmed.contains("://") {
+                return URL(string: trimmed)
+            }
+            return URL(string: "https://\(trimmed)")
+        }
     }
 }
 

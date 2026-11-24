@@ -10,6 +10,7 @@ Configure **CLI commands**, **apps to launch**, **macOS Desktop spaces**, and **
 - **CLI Commands**: Run shell commands silently in the background (`/bin/zsh -lc`) or open them in a visible Terminal window, with custom working directory and optional delay.
 - **Desktops & Window Tiling**:
   - Group apps by macOS Desktop (`Desktop 1`–`9` or `Current Desktop`).
+  - **Browser URLs**: Automatically detects browsers (Safari, Chrome, Arc, Firefox, Brave, Edge, etc.) so you can configure one or more URLs to open on launch (and lets you attach URLs/deep links to any app).
   - Snap windows to **Maximize**, **Left / Right / Top / Bottom Half**, **Top-Left / Top-Right / Bottom-Left / Bottom-Right Corner**, **Left / Center / Right Third**, **Left / Right Two-Thirds**, or **Centered**.
   - Live miniature monitor preview inside each Desktop card so you can visually verify your layout.
   - Multi-display support (choose Display 1, Display 2, etc.).
