@@ -273,7 +273,7 @@ public struct ProfileDetailView: View {
                 .controlSize(.small)
             }
 
-            Text("Tip: Switching to Desktop 1–9 uses macOS Mission Control shortcuts (Control + 1…9). Enable them in System Settings → Keyboard → Keyboard Shortcuts → Mission Control.")
+            Text("macup switches to each Desktop automatically via Accessibility and creates missing Desktops in Mission Control on demand.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

@@ -109,8 +109,9 @@ ${ICON_PLIST_ENTRY}
 </plist>
 EOF
 
-echo "Ad-hoc signing ${BUNDLE_DIR}..."
-codesign --force --deep --sign - "$BUNDLE_DIR"
+SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+echo "Signing ${BUNDLE_DIR} with identity '${SIGN_IDENTITY}'..."
+codesign --force --deep --sign "$SIGN_IDENTITY" "$BUNDLE_DIR"
 
 echo "Done! App bundle created at:"
 echo "  $BUNDLE_DIR"

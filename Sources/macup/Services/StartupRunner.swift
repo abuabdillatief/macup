@@ -55,7 +55,6 @@ public final class StartupRunner {
             }
 
             // 2. Desktops & Apps
-            var currentSpaceIndex = 1
             for desktop in profile.desktops {
                 if Task.isCancelled { return }
                 let enabledApps = desktop.apps.filter { $0.isEnabled }
@@ -66,67 +65,15 @@ public final class StartupRunner {
                 self.log(.info, "Setting up desktop \"\(desktop.name)\"...")
 
                 if desktop.spaceIndex > 0 {
-                    do {
-                        let directEnabled = WindowManager.isDirectDesktopShortcutEnabled(for: desktop.spaceIndex)
-                        if directEnabled {
-                            var changed = try await self.performSpaceSwitch {
-                                try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
-                            }
-                            if !changed && desktop.spaceIndex > currentSpaceIndex {
-                                self.log(.info, "Desktop \(desktop.spaceIndex) not found — creating it in Mission Control...")
-                                let created = await WindowManager.createNewDesktopSpace()
-                                if created {
-                                    self.log(.success, "Created new Desktop space.")
-                                    try? await Task.sleep(nanoseconds: 500_000_000)
-                                    changed = try await self.performSpaceSwitch {
-                                        try WindowManager.switchToDesktopSpace(desktop.spaceIndex)
-                                    }
-                                } else {
-                                    self.log(.warning, "Could not auto-create Desktop \(desktop.spaceIndex) via Mission Control.")
-                                }
-                            }
-                            if changed {
-                                self.log(.success, "Switched to Desktop \(desktop.spaceIndex) (Control+\(desktop.spaceIndex)).")
-                            } else {
-                                self.log(.info, "Staying on Desktop \(desktop.spaceIndex).")
-                            }
-                        } else {
-                            let delta = desktop.spaceIndex - currentSpaceIndex
-                            if delta != 0 {
-                                let dirLabel = delta > 0 ? "Right" : "Left"
-                                var movedCount = 0
-                                for step in 0..<abs(delta) {
-                                    var changed = try await self.performSpaceSwitch {
-                                        try WindowManager.stepDesktopSpace(direction: delta)
-                                    }
-                                    if !changed && delta > 0 {
-                                        // Target space doesn't exist yet — create one automatically, then step into it
-                                        self.log(.info, "Desktop \(currentSpaceIndex + step + 1) not found — creating it in Mission Control...")
-                                        let created = await WindowManager.createNewDesktopSpace()
-                                        if created {
-                                            self.log(.success, "Created new Desktop space.")
-                                            try? await Task.sleep(nanoseconds: 500_000_000)
-                                            changed = try await self.performSpaceSwitch {
-                                                try WindowManager.stepDesktopSpace(direction: delta)
-                                            }
-                                        } else {
-                                            self.log(.warning, "Could not auto-create Desktop \(currentSpaceIndex + step + 1) via Mission Control.")
-                                        }
-                                    }
-                                    if changed { movedCount += 1 }
-                                }
-                                if movedCount == abs(delta) {
-                                    self.log(.success, "Switched to Desktop \(desktop.spaceIndex) via Control+\(dirLabel) (×\(movedCount)).")
-                                } else {
-                                    self.log(.warning, "Moved \(movedCount)/\(abs(delta)) space(s) via Control+\(dirLabel).")
-                                }
-                            } else {
-                                self.log(.info, "Using Desktop \(desktop.spaceIndex).")
-                            }
+                    let switched = await WindowManager.ensureAndSwitchToDesktopSpace(desktop.spaceIndex) { msg in
+                        Task { @MainActor [weak self] in
+                            self?.log(.info, msg)
                         }
-                        currentSpaceIndex = desktop.spaceIndex
-                    } catch {
-                        self.log(.warning, "Desktop switch skipped: \(error.localizedDescription)")
+                    }
+                    if switched {
+                        self.log(.success, "Active space is now Desktop \(desktop.spaceIndex).")
+                    } else {
+                        self.log(.warning, "Could not switch to Desktop \(desktop.spaceIndex); opening apps on current Desktop.")
                     }
                 }
 
@@ -247,22 +194,39 @@ public final class StartupRunner {
 
         let runningApp: NSRunningApplication
         var openedNewWindowWithoutActivate = false
-        if preferNewWindowOnCurrentSpace, existingApp != nil, item.isBrowser {
-            if item.bundleIdentifier.lowercased() == "com.apple.safari" {
-                let firstURL = urlsToOpen.first?.absoluteString ?? ""
-                let script = firstURL.isEmpty
-                    ? "tell application \"Safari\" to make new document"
-                    : "tell application \"Safari\" to make new document with properties {URL:\"\(firstURL.replacingOccurrences(of: "\"", with: "\\\""))\"}"
-                _ = await runAppleScript(script)
+        if preferNewWindowOnCurrentSpace, let existing = existingApp {
+            let windowsHereBefore = WindowManager.visibleWindowCount(pid: existing.processIdentifier)
+            if windowsHereBefore == 0 {
+                // App is already running on a different Desktop Space — open a new window on THIS Space
+                if item.bundleIdentifier.lowercased() == "com.apple.safari" {
+                    let firstURL = urlsToOpen.first?.absoluteString ?? ""
+                    let script = firstURL.isEmpty
+                        ? "tell application \"Safari\" to make new document"
+                        : "tell application \"Safari\" to make new document with properties {URL:\"\(firstURL.replacingOccurrences(of: "\"", with: "\\\""))\"}"
+                    _ = await runAppleScript(script)
+                } else if item.isBrowser {
+                    var args = ["-na", appURL.path, "--args", "--new-window"]
+                    args.append(contentsOf: urlsToOpen.map(\.absoluteString))
+                    _ = await runOpenCommand(args: args)
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    if WindowManager.visibleWindowCount(pid: existing.processIdentifier) == 0 {
+                        _ = WindowManager.triggerNewWindowMenu(pid: existing.processIdentifier)
+                    }
+                } else {
+                    if !WindowManager.triggerNewWindowMenu(pid: existing.processIdentifier) {
+                        _ = await runOpenCommand(args: ["-na", appURL.path])
+                    }
+                }
                 openedNewWindowWithoutActivate = true
-                runningApp = existingApp!
+                runningApp = existing
             } else {
-                // Chromium-based (Chrome, Dia, Arc, Brave, Edge, Vivaldi, Opera) and Firefox support --new-window
-                var args = ["-na", appURL.path, "--args", "--new-window"]
-                args.append(contentsOf: urlsToOpen.map(\.absoluteString))
-                _ = await runOpenCommand(args: args)
-                openedNewWindowWithoutActivate = true
-                runningApp = existingApp!
+                // App already has a window on this Space
+                if !urlsToOpen.isEmpty {
+                    let config = NSWorkspace.OpenConfiguration()
+                    config.activates = true
+                    _ = try? await NSWorkspace.shared.open(urlsToOpen, withApplicationAt: appURL, configuration: config)
+                }
+                runningApp = existing
             }
         } else {
             let config = NSWorkspace.OpenConfiguration()
