@@ -145,7 +145,8 @@ public enum WindowManager {
     }
 
     /// Switches to macOS Desktop Space 1...9 using the standard Mission Control shortcut (Control + 1...9).
-    /// Requires Accessibility permission and "Switch to Desktop N" enabled in System Settings > Keyboard > Keyboard Shortcuts > Mission Control.
+    /// Uses System Events (which reliably triggers Mission Control symbolic hotkeys on macOS 14+),
+    /// with CGEvent fallback.
     public static func switchToDesktopSpace(_ spaceIndex: Int) throws {
         guard (1...9).contains(spaceIndex) else {
             throw WindowManagerError.invalidSpaceIndex(spaceIndex)
@@ -154,23 +155,25 @@ public enum WindowManager {
             throw WindowManagerError.accessibilityNotGranted
         }
 
-        let keyCodes: [Int: CGKeyCode] = [
-            1: CGKeyCode(kVK_ANSI_1),
-            2: CGKeyCode(kVK_ANSI_2),
-            3: CGKeyCode(kVK_ANSI_3),
-            4: CGKeyCode(kVK_ANSI_4),
-            5: CGKeyCode(kVK_ANSI_5),
-            6: CGKeyCode(kVK_ANSI_6),
-            7: CGKeyCode(kVK_ANSI_7),
-            8: CGKeyCode(kVK_ANSI_8),
-            9: CGKeyCode(kVK_ANSI_9)
+        let keyCodes: [Int: Int] = [
+            1: kVK_ANSI_1,
+            2: kVK_ANSI_2,
+            3: kVK_ANSI_3,
+            4: kVK_ANSI_4,
+            5: kVK_ANSI_5,
+            6: kVK_ANSI_6,
+            7: kVK_ANSI_7,
+            8: kVK_ANSI_8,
+            9: kVK_ANSI_9
         ]
 
         guard let keyCode = keyCodes[spaceIndex] else {
             throw WindowManagerError.invalidSpaceIndex(spaceIndex)
         }
 
-        postKeyCombo(keyCode: keyCode, flags: .maskControl)
+        if !sendSystemEventsControlKey(keyCode: keyCode) {
+            postKeyCombo(keyCode: CGKeyCode(keyCode), flags: .maskControl)
+        }
     }
 
     /// Steps left (negative) or right (positive) across Desktop Spaces using Control + Left/Right Arrow,
@@ -179,9 +182,22 @@ public enum WindowManager {
         guard isAccessibilityGranted else {
             throw WindowManagerError.accessibilityNotGranted
         }
-        let keyCode = direction >= 0 ? CGKeyCode(kVK_RightArrow) : CGKeyCode(kVK_LeftArrow)
-        // Arrow keys on macOS require .maskSecondaryFn alongside .maskControl for Mission Control to recognize them.
-        postKeyCombo(keyCode: keyCode, flags: [.maskControl, .maskSecondaryFn])
+        let keyCode = direction >= 0 ? kVK_RightArrow : kVK_LeftArrow
+        if !sendSystemEventsControlKey(keyCode: keyCode) {
+            postKeyCombo(keyCode: CGKeyCode(keyCode), flags: [.maskControl, .maskSecondaryFn])
+        }
+    }
+
+    private static func sendSystemEventsControlKey(keyCode: Int) -> Bool {
+        let scriptSource = """
+        tell application "System Events"
+            key code \(keyCode) using control down
+        end tell
+        """
+        var errorDict: NSDictionary?
+        let script = NSAppleScript(source: scriptSource)
+        _ = script?.executeAndReturnError(&errorDict)
+        return errorDict == nil
     }
 
     /// Best-effort creation of a new Desktop Space via Mission Control UI scripting.
