@@ -75,6 +75,8 @@ PY
   ICON_PLIST_ENTRY=$'    <key>CFBundleIconFile</key>\n    <string>AppIcon</string>'
 fi
 
+BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+
 cat > "$CONTENTS_DIR/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -95,9 +97,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>${BUILD_NUMBER}</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -112,6 +114,8 @@ EOF
 SIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 echo "Signing ${BUNDLE_DIR} with identity '${SIGN_IDENTITY}'..."
 codesign --force --deep --sign "$SIGN_IDENTITY" "$BUNDLE_DIR"
+touch "$BUNDLE_DIR"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$BUNDLE_DIR" >/dev/null 2>&1 || true
 
 echo "Done! App bundle created at:"
 echo "  $BUNDLE_DIR"
